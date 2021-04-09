@@ -1,0 +1,256 @@
+globals
+[
+  clock
+  generations          ; a counter to keep track of the number of times the cells have divided
+  number-of-cells      ; a counter used to keep track of the number of total cells in the world
+  number-of-drug       ;counter for keeping track of drug concentration
+  Migration-Probability
+  Macrophage-Strength
+  Neutrophil-Homing-Range
+  ShowDebris
+  resistance
+]
+
+breed [bacteria bacterium]         ; this is the sub-category of turtles that are bacterial cells
+breed [neutrophils neutrophil]    ; this is the first wave of immunes cells, they release anti-microbial cytokines and can also phagocytose bacteria
+breed [macrophages macrophage]     ; this is the second wave of immune cells, the phagocytes that "clean up" debris and remove aged neutrophils
+breed [drugs drug]                 ; this is the sub category for wound healing drug added
+
+turtles-own [age]      ; a counter to keep track of turtles age after dividing (replaces "clock")
+patches-own [
+  debris               ; all dead cell become "debris" that must be removed to fully heal the wound
+  wound                ; only a subset of patches are in the "Wound" and this represents where bacteria can enter from
+]
+
+to setup
+  __clear-all-and-reset-ticks           ; clear all
+
+  ask patch 0 0 [ask patches in-radius 15 [set wound 1 set pcolor red]]
+
+  if Neutrophil_Response = "Low" [create-neutrophils ceiling (.1 * Immune-Cell-Infiltration)]
+  if Neutrophil_Response = "Normal" [create-neutrophils ceiling (1 * Immune-Cell-Infiltration)]
+  if Neutrophil_Response = "High" [create-neutrophils ceiling (2 * Immune-Cell-Infiltration)]
+
+  ask neutrophils
+    [
+      setxy random-xcor random-ycor      ; randomize turtle locations to locations within the boundaries of the world
+      setxy pycor pxcor                  ; place the turtles on the center of each patch
+      set shape "neutrophil"            ; denote the shape of the turtle as an bacteria cell shape
+      set age 1
+    ]
+
+    set Migration-Probability 70
+    set Macrophage-Strength 3
+    set Neutrophil-Homing-Range 1
+    set ShowDebris true
+end
+
+to Run-Simulation
+  proliferate-bacteria
+  proliferate-neutrophils
+  proliferate-macrophages
+  migrate
+  Leukocyte-Actions
+  resistdrug
+
+  if any? bacteria [
+    if Neutrophil_Response = "Low" and ticks mod 3 = 0 [create-neutrophils ceiling (.1 * Immune-Cell-Infiltration) [setxy random-xcor random-ycor setxy pycor pxcor set shape "neutrophil" set age 1]]
+    if Neutrophil_Response = "Normal" [create-neutrophils ceiling (1 * Immune-Cell-Infiltration)[setxy random-xcor random-ycor setxy pycor pxcor set shape "neutrophil" set age 1]]
+    if Neutrophil_Response = "High" [create-neutrophils ceiling (2 * Immune-Cell-Infiltration) [setxy random-xcor random-ycor setxy pycor pxcor set shape "neutrophil" set age 1]]
+
+  ]
+
+    if any? patches with [debris > 0 and ticks > 24] [
+    if Macrophage_Response = "Low" and ticks mod 3 = 0 [create-macrophages ceiling (.1 * Immune-Cell-Infiltration) [setxy random-xcor random-ycor setxy pycor pxcor set shape "macrophage" set age 1]]
+    if Macrophage_Response = "Normal" [create-macrophages ceiling (1 * Immune-Cell-Infiltration)[setxy random-xcor random-ycor setxy pycor pxcor set shape "macrophage" set age 1]]
+    if Macrophage_Response = "High" [create-macrophages ceiling (2 * Immune-Cell-Infiltration) [setxy random-xcor random-ycor setxy pycor pxcor set shape "macrophage" set age 1]]
+
+  ]
+
+  ifelse ShowDebris                                 ;set patches to report debris by color
+  [ask patches with [wound = 1 and debris > 0][set pcolor scale-color brown debris 0 4]]   ;scale patch color based on amount of debris
+  [ask patches [set pcolor black]]
+  ask patches with [wound = 1 and debris = 0][set pcolor red] ;reset patch color to red or black based on previous wound state
+  ask patches with [wound = 0 and debris = 0][set pcolor black]
+
+
+  ask neutrophils with [age > 48][if 100 * (age / 96) > random 100 [die ask patch-here [set debris debris + 1]]]
+  ask drugs with [age > 50][if 100 * (age / 96) > random 100 [die]]
+  ask macrophages with [age > 96][if 100 * (age / 192) > random 100 [die]]
+  ask patches [if debris < 0 [set debris 0]]
+
+  ask turtles [set age age + 1]
+  set number-of-cells count bacteria           ; this counts the total number of bacteria cells, which is shown in the counter window below the main world.
+  set clock clock + 1
+  tick
+
+end
+
+to add_drug
+
+  create-drugs ceiling (2 * Initial-bacteria)
+  ask drugs [
+        setxy random-xcor random-ycor      ; randomize turtle locations to locations within the boundaries of the world
+        setxy pycor pxcor                  ; place the turtles on the center of each patch
+        set shape "dot"            ; denote the shape of the turtle as an bacteria cell shape
+        set color blue
+        set age 1
+     ]
+
+    set Migration-Probability 70
+    set ShowDebris true
+
+end
+
+to infect
+  ask patch 0 0 [
+    ask n-of Initial-Bacteria patches in-radius 15[
+      sprout 1        ; create the number of initial bacteria as designated by the slider on the interface tab
+      [
+        set breed bacteria              ; denote the 'breed' of the turtle as an "bacteria" cell
+        set shape "bacteria"            ; denote the shape of the turtle as an bacteria cell shape
+        set age random prolif-rate
+      ]
+    ]
+  ]
+
+end
+
+to proliferate-bacteria         ; this sub-routine simulates cell proliferation without any contact inhibition  [
+  ask bacteria [
+      if age mod prolif-rate = 0 and count bacteria-on neighbors < 8                 ; cell division happens for every cell at the same time (i.e. clock tick) according to the 'prolif-rate' set on the interface tab. See 'proliferate' sub-routine below.
+      [
+        hatch 1 [
+          let attempted-moves  0
+          while [any? other bacteria-here and attempted-moves < 16]
+          [
+            if not any? neighbors with [wound = 1 and not any? bacteria-here][die]
+            move-to one-of neighbors with [wound = 1 and not any? bacteria-here]
+            set attempted-moves attempted-moves + 1]
+
+        ]
+      ]
+    ]
+end
+
+to proliferate-neutrophils                        ; this procedure simulates cell proliferation with contact inhibition for neutrophils
+  ask neutrophils [
+    if age mod 6 = 0 and age < 48 and count neutrophils-on neighbors = 0
+      [
+        hatch 1 [
+          let attempted-moves  0
+          while [any? other neutrophils-here and attempted-moves < 16]
+          [
+            move-to one-of neighbors with [not any? neutrophils-here]
+            set attempted-moves attempted-moves + 1]
+
+        ]
+      ]
+  ]
+
+end
+
+to proliferate-macrophages                       ; this procedure simulates cell proliferation with contact inhibition for macrophages
+  ask macrophages [
+    if age mod 15 = 0 and age < 48 and count macrophages-on neighbors = 0
+      [
+        hatch 1 [
+          let attempted-moves  0
+          while [any? other macrophages-here and attempted-moves < 16]
+          [
+            move-to one-of neighbors with [not any? macrophages-here]
+            set attempted-moves attempted-moves + 1]
+
+        ]
+      ]
+  ]
+
+end
+
+to migrate
+  if random 100 <= migration-probability          ; migration is probabalistic based on a slider value
+  [
+    ask bacteria
+    [
+      if any? neighbors with [not any? bacteria-here and wound = 1]            ; migration only occurs if there is at least one empty neighboring patch
+      [
+        move-to one-of neighbors with [not any? bacteria-here] ; migrate to one of the 8 neighboring patches without a cell in it already
+      ]
+    ]
+  ]
+
+  ask neutrophils ;neutrophils move towards bacteria in their homine range, or to a random neighboring patch
+  [
+    ifelse any? bacteria in-radius Neutrophil-Homing-Range [
+      face min-one-of bacteria [distance myself]
+      fd 1
+    ]
+    [move-to one-of neighbors]
+  ]
+
+  ask macrophages
+  [
+    ifelse any? bacteria-on neighbors or any? neighbors with [debris > 0]
+    [move-to one-of neighbors with [any? bacteria-here or debris > 0]]
+    [move-to one-of neighbors]
+  ]
+
+  ask drugs
+    [
+      if any? neighbors with [not any? drugs-here and wound = 1]            ; migration only occurs if there is at least one empty neighboring patch
+      [
+        move-to one-of neighbors with [not any? drugs-here ]; migrate to one of the 8 neighboring patches without a cell in it already
+      ]
+    ]
+
+end
+
+to Leukocyte-Actions
+  ask neutrophils [if any? bacteria-on patch-here
+    [
+      ask patch-here [set debris debris + (count bacteria-here)]
+      ask bacteria-on patch-here [die]
+    ]
+
+  ]
+
+  ask macrophages [if any? bacteria-on patch-here
+    [ask bacteria-on patch-here [die]]
+    if [debris] of patch-here > 0
+    [ask patch-here [set debris debris - Macrophage-Strength]]
+  ]
+
+end
+
+to resistdrug
+  if Antibiotic_Resistance = "Normal Wound"
+      [ask bacteria [if any? drugs-on patch-here
+       [ask bacteria-on neighbors4 [die]]]]
+
+  ;if Antibiotic_Resistance = "Normal"
+   ;[ask bacteria [if any? drugs-on patch-here
+    ; [ask bacteria in-radius 1 [ set shape "rbacteria"]]
+    ;]
+  ;]
+  if Antibiotic_Resistance = "Diabetic Wound"
+
+  [ask bacteria [if any? drugs-on patch-here
+     [ask bacteria-on neighbors4 [ set shape "rbacteria"]]
+    ]
+  ]
+
+
+end
+
+
+
+library(tidyverse) 
+library(readr)
+
+data <- read_csv("diabeticmodel.csv")
+
+ggplot() + geom_path(data=data, aes(x=Time, y=Normal, colour="Normal")) + geom_path(data=data, aes(x=Time, y=Diabetes, colour="Diabetes")) + xlab("Time (hrs)") + ylab("Bacteria Cell Count") +ggtitle("Bacterial Cell Count in Wound Healing Model") + labs(colour = "Tissue Model")
+
+
+ttest <- read_csv("diabeticttest.csv")
+t.test(ttest$Diabetic,ttest$Normal)
